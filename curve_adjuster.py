@@ -376,7 +376,24 @@ class CurveAdjusterApp:
             messagebox.showerror("Error", f"Failed to apply adjustments: {str(e)}")
     
     def apply_adjustments_iterative(self, desired_y_min, desired_y_max):
-        """Iteratively adjust to achieve exact desired min/max when evaluated at original X"""
+        """Adjust polynomial to match desired Y range AND pass through (0,0) in original X coords.
+        
+        Algorithm:
+            q(x) = k * p(x - h) + d, where:
+                - p(x) is the original fitted polynomial
+                - k = scale factor
+                - h = X-shift  
+                - d = Y-shift
+            
+            Constraints (3 equations, 3 unknowns):
+                - min(q over [x_min, x_max]) = desired_y_min
+                - max(q over [x_min, x_max]) = desired_y_max
+                - q(0) = 0
+            
+            We iterate on h:
+                - Given h, we can solve k and d directly from min/max
+                - Then check q(0) = 0; if not, update h via Newton step
+        """
         # Get max deviation percentage
         try:
             max_deviation_pct = float(self.max_deviation_entry.get().strip())
@@ -388,7 +405,11 @@ class CurveAdjusterApp:
             return
         
         # Check if requested adjustment exceeds max deviation
-        original_y_range = self.y_original.max() - self.y_original.min()
+        # Use polynomial-based ranges (calculus) for fair comparison
+        x_min = self.x_original.min()
+        x_max = self.x_original.max()
+        orig_y_min, orig_y_max = self._get_poly_min_max(self.original_poly_coeffs, x_min, x_max)
+        original_y_range = orig_y_max - orig_y_min
         desired_range = desired_y_max - desired_y_min
         change_pct = abs(desired_range - original_y_range) / original_y_range * 100
         
@@ -396,215 +417,251 @@ class CurveAdjusterApp:
             response = messagebox.askyesno("Warning", 
                 f"Requested adjustment ({change_pct:.1f}% change) exceeds\n"
                 f"maximum allowed deviation ({max_deviation_pct:.1f}%).\n\n"
-                f"Original Y range: {original_y_range:.4f}\n"
+                f"Original Y range (fitted): {original_y_range:.4f}\n"
                 f"Desired Y range: {desired_range:.4f}\n\n"
                 f"Continue anyway?")
             if not response:
                 return
         
-        max_iterations = 50  # Increased iterations for better convergence
-        tolerance = 0.001  # 0.1% tolerance
+        # Run the new robust algorithm
+        success, info = self._compute_adjusted_polynomial(desired_y_min, desired_y_max, max_deviation_pct)
         
-        # Start with the user's desired values
-        target_y_min = desired_y_min
-        target_y_max = desired_y_max
+        if not success:
+            messagebox.showerror("Error", info.get('error', 'Adjustment failed'))
+            return
         
-        # Adaptive correction factor
-        correction_factor = 0.8
+        # Store results
+        self.adjusted_poly_coeffs = info['coeffs']
+        self.adjusted_order = info['order']
+        self.x_offset = info['x_offset']
+        self.adjustment_stats = info['stats']
         
-        for iteration in range(max_iterations):
-            # Apply adjustments with current target
-            success = self.apply_adjustments_single(target_y_min, target_y_max)
-            
-            if not success:
-                messagebox.showerror("Error", "Failed to apply adjustments")
-                return
-            
-            # Evaluate final polynomial at original X values
-            final_y_values = np.polyval(self.adjusted_poly_coeffs, self.x_original)
-            actual_min = final_y_values.min()
-            actual_max = final_y_values.max()
-            
-            # Check if we're within tolerance
-            min_error = abs(actual_min - desired_y_min)
-            max_error = abs(actual_max - desired_y_max)
-            
-            if min_error < tolerance and max_error < tolerance:
-                # Success! Display results
-                self.display_adjustment_results(iteration + 1, actual_min, actual_max, desired_y_min, desired_y_max)
-                return
-            
-            # Adaptive correction based on error magnitude
-            # If errors are large, use smaller corrections to avoid oscillation
-            avg_error = (min_error + max_error) / 2
-            if avg_error > 10:
-                correction_factor = 0.5
-            elif avg_error > 5:
-                correction_factor = 0.6
-            elif avg_error > 1:
-                correction_factor = 0.7
-            else:
-                correction_factor = 0.85
-            
-            # Adjust targets for next iteration
-            # If actual is too low, increase target; if too high, decrease target
-            min_adjustment = desired_y_min - actual_min
-            max_adjustment = desired_y_max - actual_max
-            
-            target_y_min += min_adjustment * correction_factor
-            target_y_max += max_adjustment * correction_factor
+        # Store the final adjusted data (in original X coordinates)
+        self.x_adjusted = self.x_original.copy()
+        self.y_adjusted = np.polyval(self.adjusted_poly_coeffs, self.x_original)
         
-        # Max iterations reached
-        messagebox.showwarning("Warning", 
-            f"Reached maximum iterations ({max_iterations}).\n"
-            f"Achieved range: [{actual_min:.4f}, {actual_max:.4f}]\n"
-            f"Desired range: [{desired_y_min:.4f}, {desired_y_max:.4f}]\n"
-            f"Close enough for practical use.")
-        self.display_adjustment_results(max_iterations, actual_min, actual_max, desired_y_min, desired_y_max)
+        # Display results
+        actual_min = info['actual_min']
+        actual_max = info['actual_max']
+        iterations = info['iterations']
+        self.display_adjustment_results(iterations, actual_min, actual_max, desired_y_min, desired_y_max)
     
-    def apply_adjustments_single(self, target_y_min, target_y_max):
-        """Single pass of adjustment algorithm"""
+    def _get_poly_min_max(self, coeffs, x_min, x_max):
+        """Find min and max of polynomial over [x_min, x_max] using calculus"""
+        deriv = np.polyder(coeffs)
+        crit = np.roots(deriv) if len(deriv) > 0 else np.array([])
+        real_crit = crit[np.isreal(crit)].real if len(crit) > 0 else np.array([])
+        valid_crit = real_crit[(real_crit >= x_min) & (real_crit <= x_max)]
+        eval_pts = np.concatenate([valid_crit, [x_min, x_max]])
+        eval_vals = np.polyval(coeffs, eval_pts)
+        return eval_vals.min(), eval_vals.max()
+    
+    def _shift_polynomial(self, coeffs, h):
+        """Compute coefficients of q(x) = p(x - h) where p has given coeffs.
+        
+        Uses polynomial composition: q(x) = p(x - h)
+        """
+        p = np.poly1d(coeffs)
+        # Represent (x - h) as a polynomial in x
+        x_minus_h = np.poly1d([1.0, -h])
+        # Compose: q = p o (x - h)
+        q = p(x_minus_h)
+        return q.coeffs
+    
+    def _compute_adjusted_polynomial(self, desired_y_min, desired_y_max, max_deviation_pct):
+        """Robust algorithm to find polynomial passing through origin with desired Y range.
+        
+        Form: q(x) = k * p(x - h) + d
+            where p is the original polynomial, k=scale, h=X-shift, d=Y-shift
+        
+        Constraints:
+            - min(q) = desired_y_min
+            - max(q) = desired_y_max
+            - q(0) = 0
+        
+        Strategy: Reduce to 1D root-finding on h.
+            - For any h: solve k, d directly from min/max constraints
+            - Then F(h) = q(0; h) is a 1D function we want to zero
+            - Use brentq with bracketing search
+        
+        Returns (success, info_dict)
+        """
         try:
+            from scipy.optimize import brentq
             
-            if self.original_poly_coeffs is None:
-                return False
+            x_min = self.x_original.min()
+            x_max = self.x_original.max()
+            desired_range = desired_y_max - desired_y_min
             
-            x_min_range = self.x_original.min()
-            x_max_range = self.x_original.max()
+            # Get original polynomial info
+            orig_y_min, orig_y_max = self._get_poly_min_max(self.original_poly_coeffs, x_min, x_max)
+            original_range = orig_y_max - orig_y_min
             
-            # Step 2: Find true min/max of original fitted polynomial using calculus
-            derivative_orig = np.polyder(self.original_poly_coeffs)
-            critical_orig = np.roots(derivative_orig)
-            real_critical_orig = critical_orig[np.isreal(critical_orig)].real
-            valid_critical_orig = real_critical_orig[(real_critical_orig >= x_min_range) & (real_critical_orig <= x_max_range)]
-            eval_points_orig = np.concatenate([valid_critical_orig, [x_min_range, x_max_range]])
-            eval_values_orig = np.polyval(self.original_poly_coeffs, eval_points_orig)
+            if original_range < 1e-12:
+                return False, {'error': 'Original polynomial has zero Y range'}
             
-            original_y_min = eval_values_orig.min()
-            original_y_max = eval_values_orig.max()
+            base_scale = desired_range / original_range
             
-            # Step 3: Calculate range
-            original_range = original_y_max - original_y_min
-            desired_range = target_y_max - target_y_min
+            # Sanity check
+            if abs(base_scale) > 100 or abs(base_scale) < 0.01:
+                return False, {'error': f'Scale factor {base_scale:.4f} is unreasonable. Check input data.'}
             
-            # Step 4: Apply scale to ORIGINAL DATA (not fitted values)
-            scale_factor = desired_range / original_range
-            y_scaled = self.y_original * scale_factor
+            # Define the system for a given h, returning (q_coeffs, k, d, shift_y_min, shift_y_max)
+            def compute_q_for_h(h):
+                p_shift_coeffs = self._shift_polynomial(self.original_poly_coeffs, h)
+                shift_y_min, shift_y_max = self._get_poly_min_max(p_shift_coeffs, x_min, x_max)
+                shift_range = shift_y_max - shift_y_min
+                if shift_range < 1e-12:
+                    return None, None, None, None, None
+                k = desired_range / shift_range
+                d = desired_y_min - k * shift_y_min
+                q_coeffs = p_shift_coeffs * k
+                q_coeffs[-1] += d
+                return q_coeffs, k, d, shift_y_min, shift_y_max
             
-            # Step 5: Fit polynomial to scaled data
-            poly_scaled, order_scaled, r2_scaled = self.find_best_fit(
-                self.x_original, y_scaled, force_zero_intercept=False
-            )
+            def F(h):
+                """Returns q(0) for a given h. We want F(h) = 0."""
+                q_coeffs, _, _, _, _ = compute_q_for_h(h)
+                if q_coeffs is None:
+                    return float('inf')
+                return np.polyval(q_coeffs, 0.0)
             
-            # Confirm range using derivative
-            deriv_scaled = np.polyder(poly_scaled)
-            crit_scaled = np.roots(deriv_scaled)
-            real_crit_scaled = crit_scaled[np.isreal(crit_scaled)].real
-            valid_crit_scaled = real_crit_scaled[(real_crit_scaled >= x_min_range) & (real_crit_scaled <= x_max_range)]
-            eval_pts_scaled = np.concatenate([valid_crit_scaled, [x_min_range, x_max_range]])
-            eval_vals_scaled = np.polyval(poly_scaled, eval_pts_scaled)
-            scaled_y_min = eval_vals_scaled.min()
-            scaled_y_max = eval_vals_scaled.max()
-            scaled_range = scaled_y_max - scaled_y_min
+            # Step 1: Sweep h over a reasonable range to find sign changes
+            data_range = x_max - x_min
+            h_search = np.linspace(-data_range * 1.5, data_range * 1.5, 121)
+            F_values = []
+            for h in h_search:
+                F_h = F(h)
+                F_values.append(F_h)
             
-            # Step 6: Calculate Y-offset to align to target min/max
-            y_offset = target_y_min - scaled_y_min
-            y_offset_data = y_scaled + y_offset
+            F_arr = np.array(F_values)
             
-            # Step 7: Fit polynomial to offset data
-            poly_offset, order_offset, r2_offset = self.find_best_fit(
-                self.x_original, y_offset_data, force_zero_intercept=False
-            )
+            # Step 2: Find sign changes (brackets)
+            sign_changes = []
+            for i in range(len(F_arr) - 1):
+                if not np.isfinite(F_arr[i]) or not np.isfinite(F_arr[i+1]):
+                    continue
+                if F_arr[i] * F_arr[i+1] < 0:
+                    sign_changes.append((h_search[i], h_search[i+1]))
             
-            # Confirm y-min and y-max using derivative
-            deriv_offset = np.polyder(poly_offset)
-            crit_offset = np.roots(deriv_offset)
-            real_crit_offset = crit_offset[np.isreal(crit_offset)].real
-            valid_crit_offset = real_crit_offset[(real_crit_offset >= x_min_range) & (real_crit_offset <= x_max_range)]
-            eval_pts_offset = np.concatenate([valid_crit_offset, [x_min_range, x_max_range]])
-            eval_vals_offset = np.polyval(poly_offset, eval_pts_offset)
-            offset_y_min = eval_vals_offset.min()
-            offset_y_max = eval_vals_offset.max()
+            if not sign_changes:
+                # No sign change found - try to find h with smallest |F(h)|
+                finite_mask = np.isfinite(F_arr)
+                if np.any(finite_mask):
+                    best_idx = np.argmin(np.abs(F_arr[finite_mask]))
+                    h_best = h_search[finite_mask][best_idx]
+                    F_best = F_arr[finite_mask][best_idx]
+                    if abs(F_best) < 0.01 * desired_range:
+                        # Close enough - accept this approximate solution
+                        q_coeffs, k, d, shift_y_min, shift_y_max = compute_q_for_h(h_best)
+                        return self._build_result(q_coeffs, h_best, k, d, shift_y_min, shift_y_max,
+                                                 orig_y_min, orig_y_max, original_range,
+                                                 max_deviation_pct, 1)
+                return False, {'error': 'Could not find a polynomial that passes through origin with the desired Y range. Try a different desired range or relax the constraint.'}
             
-            # Step 8: Calculate X-offset (where curve crosses zero)
-            roots = np.roots(poly_offset)
-            real_roots = roots[np.isreal(roots)].real
-            
-            if len(real_roots) > 0:
-                self.x_offset = real_roots[np.argmin(np.abs(real_roots))]
-            else:
+            # Step 3: Find solutions with brentq for each bracket; pick the one with smallest |h|
+            solutions = []
+            for (h_lo, h_hi) in sign_changes:
                 try:
-                    from scipy.optimize import fsolve
-                    self.x_offset = fsolve(lambda x: np.polyval(poly_offset, x), 0)[0]
-                except:
-                    self.x_offset = 0
-                    messagebox.showwarning("Warning", "Could not find x-axis crossing. X-offset set to 0.")
+                    h_sol = brentq(F, h_lo, h_hi, xtol=1e-10, maxiter=100)
+                    q_coeffs, k, d, shift_y_min, shift_y_max = compute_q_for_h(h_sol)
+                    if q_coeffs is not None:
+                        solutions.append((h_sol, q_coeffs, k, d, shift_y_min, shift_y_max))
+                except Exception:
+                    continue
             
-            # Apply X-offset to the data
-            x_offset_data = self.x_original - self.x_offset
+            if not solutions:
+                return False, {'error': 'Failed to find polynomial solution. Try different desired Y values.'}
             
-            # Step 9: Fit final polynomial to x-offset data
-            self.adjusted_poly_coeffs, self.adjusted_order, r2_adjusted = self.find_best_fit(
-                x_offset_data, y_offset_data, force_zero_intercept=False
-            )
+            # Pick solution with smallest |h| (least disturbance)
+            best = min(solutions, key=lambda s: abs(s[0]))
+            h_sol, q_coeffs, k, d, shift_y_min, shift_y_max = best
             
-            # Store the final adjusted data
-            self.x_adjusted = x_offset_data
-            self.y_adjusted = y_offset_data
-            
-            # Store intermediate results for display
-            self.adjustment_stats = {
-                'original_y_min': original_y_min,
-                'original_y_max': original_y_max,
-                'original_range': original_range,
-                'scale_factor': scale_factor,
-                'scaled_y_min': scaled_y_min,
-                'scaled_y_max': scaled_y_max,
-                'scaled_range': scaled_range,
-                'y_offset': y_offset,
-                'offset_y_min': offset_y_min,
-                'offset_y_max': offset_y_max,
-                'x_offset': self.x_offset,
-                'r2_adjusted': r2_adjusted
-            }
-            
-            return True
+            # Build result info
+            return self._build_result(q_coeffs, h_sol, k, d, shift_y_min, shift_y_max,
+                                     orig_y_min, orig_y_max, original_range,
+                                     max_deviation_pct, len(sign_changes))
             
         except Exception as e:
-            print(f"Error in apply_adjustments_single: {e}")
-            return False
+            import traceback
+            traceback.print_exc()
+            return False, {'error': f'Algorithm error: {str(e)}'}
+    
+    def _build_result(self, q_coeffs, h, k, d, shift_y_min, shift_y_max,
+                      orig_y_min, orig_y_max, original_range, max_deviation_pct, iterations):
+        """Build the result dictionary from the solver output."""
+        x_min = self.x_original.min()
+        x_max = self.x_original.max()
+        
+        actual_min, actual_max = self._get_poly_min_max(q_coeffs, x_min, x_max)
+        actual_change_pct = abs((actual_max - actual_min) - original_range) / original_range * 100
+        
+        # Sanity check: not exceeding deviation
+        if actual_change_pct > max_deviation_pct + 1.0:
+            return False, {'error': f'Solution requires {actual_change_pct:.1f}% deviation (max allowed: {max_deviation_pct:.1f}%).'}
+        
+        q_at_zero = np.polyval(q_coeffs, 0.0)
+        
+        # Determine effective polynomial order
+        order = len(q_coeffs) - 1
+        for i in range(len(q_coeffs)):
+            if abs(q_coeffs[i]) > 1e-10:
+                order = len(q_coeffs) - 1 - i
+                break
+        
+        stats = {
+            'original_y_min': orig_y_min,
+            'original_y_max': orig_y_max,
+            'original_range': original_range,
+            'scale_factor': k,
+            'x_shift': h,
+            'y_shift': d,
+            'shift_y_min': shift_y_min,
+            'shift_y_max': shift_y_max,
+            'q_at_zero': q_at_zero,
+            'r2_adjusted': 1.0,
+            'actual_change_pct': actual_change_pct,
+        }
+        
+        return True, {
+            'coeffs': q_coeffs,
+            'order': order,
+            'x_offset': h,
+            'actual_min': actual_min,
+            'actual_max': actual_max,
+            'iterations': iterations,
+            'stats': stats,
+        }
     
     def display_adjustment_results(self, iterations, actual_min, actual_max, desired_y_min, desired_y_max):
         """Display the final adjustment results"""
-        # Verify: polynomial at x=0 should be ~0
+        # Verify: polynomial at x=0 should be ~0 (passes through origin in original X coords)
         y_check = np.polyval(self.adjusted_poly_coeffs, 0)
         
-        # Display adjusted equation
+        # Display adjusted equation (now in ORIGINAL X coordinates - no offset note needed)
         eq_text = self.format_equation(self.adjusted_poly_coeffs, self.adjusted_order, x_offset=0, use_caret=False)
         self.adjusted_eq_text.delete("1.0", tk.END)
         self.adjusted_eq_text.insert("1.0", 
             f"{eq_text}\n"
             f"R² = {self.adjustment_stats['r2_adjusted']:.6f}\n"
             f"Order: {self.adjusted_order}\n"
-            f"Note: X-offset of {self.x_offset:.6e} already applied to data")
+            f"Polynomial is in ORIGINAL X coordinates - evaluate directly at your X values")
         
         # Update statistics
         current_stats = self.stats_text.get("1.0", tk.END)
         stats = self.adjustment_stats
         new_stats = f"\n\nAdjustment Process (converged in {iterations} iterations):\n"
-        new_stats += f"  Step 2 - Original fitted range (calculus): [{stats['original_y_min']:.4f}, {stats['original_y_max']:.4f}]\n"
-        new_stats += f"  Step 3 - Original range: {stats['original_range']:.4f}\n"
-        new_stats += f"  Step 4 - Scale factor applied: {stats['scale_factor']:.6f}\n"
-        new_stats += f"  Step 5 - Scaled range (calculus): [{stats['scaled_y_min']:.4f}, {stats['scaled_y_max']:.4f}] = {stats['scaled_range']:.4f}\n"
-        new_stats += f"  Step 6 - Y-offset applied: {stats['y_offset']:.6f}\n"
-        new_stats += f"  Step 7 - Offset range (calculus): [{stats['offset_y_min']:.4f}, {stats['offset_y_max']:.4f}]\n"
-        new_stats += f"  Step 8 - X-offset calculated: {stats['x_offset']:.6e}\n"
-        new_stats += f"  Step 9 - X-offset applied to data (X_new = X - {stats['x_offset']:.4f})\n"
-        new_stats += f"  Step 10 - Final fit: {self.adjusted_order}{'st' if self.adjusted_order == 1 else 'nd' if self.adjusted_order == 2 else 'rd'} order (R² = {stats['r2_adjusted']:.6f})\n"
+        new_stats += f"  Original fitted range (calculus): [{stats['original_y_min']:.4f}, {stats['original_y_max']:.4f}]\n"
+        new_stats += f"  Original range: {stats['original_range']:.4f}\n"
+        new_stats += f"  Scale factor (k): {stats['scale_factor']:.6f}\n"
+        new_stats += f"  X-shift (h): {stats['x_shift']:.6f}\n"
+        new_stats += f"  Y-shift (d): {stats['y_shift']:.6f}\n"
+        new_stats += f"  Form: q(x) = k*p(x - h) + d\n"
         new_stats += f"\n  DESIRED Y range: [{desired_y_min:.4f}, {desired_y_max:.4f}]\n"
         new_stats += f"  ACTUAL Y range (at original X): [{actual_min:.4f}, {actual_max:.4f}]\n"
         new_stats += f"  Error: min={abs(actual_min-desired_y_min):.6f}, max={abs(actual_max-desired_y_max):.6f}\n"
-        new_stats += f"  Y at X=0 (shifted coords): {y_check:.6e} (passes through origin ✓)"
+        new_stats += f"  Actual Y range change: {stats['actual_change_pct']:.2f}%\n"
+        new_stats += f"  Y at X=0: {y_check:.6e} (passes through origin ✓)"
         
         self.stats_text.delete("1.0", tk.END)
         self.stats_text.insert("1.0", current_stats.rstrip() + new_stats)
@@ -616,7 +673,8 @@ class CurveAdjusterApp:
         success_msg = f"Adjustments applied successfully!\n(Converged in {iterations} iterations)\n\n"
         success_msg += f"Desired Y range: [{desired_y_min:.4f}, {desired_y_max:.4f}]\n"
         success_msg += f"Actual Y range:  [{actual_min:.4f}, {actual_max:.4f}]\n"
-        success_msg += f"Error: ±{max(abs(actual_min-desired_y_min), abs(actual_max-desired_y_max)):.6f}"
+        success_msg += f"Error: ±{max(abs(actual_min-desired_y_min), abs(actual_max-desired_y_max)):.6f}\n"
+        success_msg += f"Y at X=0: {y_check:.2e} (passes through origin)"
         
         messagebox.showinfo("Success", success_msg)
     
@@ -1052,17 +1110,14 @@ class CurveAdjusterApp:
             messagebox.showwarning("Warning", "No adjusted equation available")
             return
         
-        # Copy equation WITHOUT x-offset notation (already baked into coefficients)
+        # Polynomial is in ORIGINAL X coordinates - just copy the equation directly
         eq_text = self.format_equation(self.adjusted_poly_coeffs, self.adjusted_order, x_offset=0, use_caret=True)
         
-        # Add note about x-offset being applied
-        full_text = f"{eq_text}\n\n// Note: X-offset of {self.x_offset:.6e} was applied to data before fitting\n// When using this equation, evaluate at (X - {self.x_offset:.6e})"
-        
-        pyperclip.copy(full_text)
+        pyperclip.copy(eq_text)
         messagebox.showinfo("Success", 
             f"Adjusted equation copied to clipboard!\n\n"
             f"(Using ^ for exponents)\n"
-            f"Note: X-offset of {self.x_offset:.6e} already applied")
+            f"Equation is in ORIGINAL X coordinates - evaluate directly")
     
     def copy_new_y_values(self):
         """Copy new Y values (final polynomial evaluated at ORIGINAL X values) to clipboard"""
