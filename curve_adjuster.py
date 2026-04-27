@@ -774,8 +774,11 @@ class CurveAdjusterApp:
         ttk.Button(range_frame, text="Export to Curve Adjustment", command=self.export_to_curve_adjustment).grid(
             row=10, column=0, columnspan=2, pady=5, padx=5, sticky=(tk.W, tk.E)
         )
-        ttk.Button(range_frame, text="Clear All", command=self.clear_averaging).grid(
+        ttk.Button(range_frame, text="Clear Data", command=self.clear_averaging_data).grid(
             row=11, column=0, columnspan=2, pady=5, padx=5, sticky=(tk.W, tk.E)
+        )
+        ttk.Button(range_frame, text="Clear X-Range Config", command=self.clear_x_range_config).grid(
+            row=12, column=0, columnspan=2, pady=5, padx=5, sticky=(tk.W, tk.E)
         )
         
         # Results Section (spans both columns)
@@ -976,16 +979,18 @@ class CurveAdjusterApp:
             f"Range: [{self.averaged_y.min():.6f}, {self.averaged_y.max():.6f}]\n\n"
             f"Ready to paste into Excel/spreadsheet!")
     
-    def clear_averaging(self):
-        """Clear all averaging inputs and results"""
+    def clear_averaging_data(self):
+        """Clear dataset inputs and results, but preserve X-Range configuration"""
         for x_input in self.avg_x_inputs:
             x_input.delete("1.0", tk.END)
         for y_input in self.avg_y_inputs:
             y_input.delete("1.0", tk.END)
         
-        self.avg_x_min.delete(0, tk.END)
-        self.avg_x_max.delete(0, tk.END)
-        self.avg_x_interval.delete(0, tk.END)
+        # Do NOT clear X Min, X Max, and Interval - preserve them for next dataset
+        # self.avg_x_min.delete(0, tk.END)
+        # self.avg_x_max.delete(0, tk.END)
+        # self.avg_x_interval.delete(0, tk.END)
+        
         self.avg_x_values_input.delete("1.0", tk.END)
         self.avg_results_text.delete("1.0", tk.END)
         
@@ -994,6 +999,15 @@ class CurveAdjusterApp:
         
         self.avg_figure.clear()
         self.avg_canvas.draw()
+    
+    def clear_x_range_config(self):
+        """Clear X-Range configuration (Min, Max, Interval, and pasted X values)"""
+        self.avg_x_min.delete(0, tk.END)
+        self.avg_x_max.delete(0, tk.END)
+        self.avg_x_interval.delete(0, tk.END)
+        self.avg_x_values_input.delete("1.0", tk.END)
+        
+        messagebox.showinfo("Success", "X-Range configuration cleared")
     
     def export_to_curve_adjustment(self):
         """Export averaged X and Y data to Curve Adjustment tab"""
