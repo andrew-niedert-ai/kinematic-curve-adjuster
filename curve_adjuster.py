@@ -33,27 +33,32 @@ class CurveAdjusterApp:
         self.x_offset = 0
         self.adjustment_stats = {}
         
+        # Manual adjustment variables
+        self.manual_scale = 1.0
+        self.manual_y_shift = 0.0
+        self.manual_x_shift = 0.0
+        
         self.create_widgets()
         
     def create_widgets(self):
         # Create notebook (tabbed interface)
-        notebook = ttk.Notebook(self.root)
-        notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure root grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         
         # Create tabs
-        tab1 = ttk.Frame(notebook, padding="10")
-        tab2 = ttk.Frame(notebook, padding="10")
+        tab1 = ttk.Frame(self.notebook, padding="10")
+        tab2 = ttk.Frame(self.notebook, padding="10")
         
-        notebook.add(tab1, text="Curve Adjustment")
-        notebook.add(tab2, text="Data Averaging")
+        self.notebook.add(tab1, text="Curve Adjustment")
+        self.notebook.add(tab2, text="Data Averaging")
         
         # Configure tab grid weights
         tab1.columnconfigure(1, weight=1)
-        tab1.rowconfigure(4, weight=1)
+        tab1.rowconfigure(5, weight=1)
         tab2.columnconfigure(0, weight=1)
         tab2.rowconfigure(1, weight=1)
         
@@ -95,6 +100,7 @@ class CurveAdjusterApp:
         param_frame = ttk.LabelFrame(main_frame, text="Adjustment Parameters", padding="10")
         param_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
+        # Desired values
         ttk.Label(param_frame, text="Desired Y Min:").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.y_min_entry = ttk.Entry(param_frame, width=15)
         self.y_min_entry.grid(row=0, column=1, padx=5)
@@ -103,13 +109,84 @@ class CurveAdjusterApp:
         self.y_max_entry = ttk.Entry(param_frame, width=15)
         self.y_max_entry.grid(row=0, column=3, padx=5)
         
+        ttk.Label(param_frame, text="Max Deviation %:").grid(row=0, column=4, sticky=tk.W, padx=5)
+        self.max_deviation_entry = ttk.Entry(param_frame, width=10)
+        self.max_deviation_entry.insert(0, "50")  # Default 50%
+        self.max_deviation_entry.grid(row=0, column=5, padx=5)
+        
         ttk.Button(param_frame, text="Apply Adjustments", command=self.apply_adjustments).grid(
-            row=0, column=4, padx=10
+            row=0, column=6, padx=10
+        )
+        
+        # Manual Controls Frame
+        manual_frame = ttk.LabelFrame(main_frame, text="Manual Fine-Tuning Controls", padding="10")
+        manual_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        
+        # Scaling controls
+        ttk.Label(manual_frame, text="Scale Y (%):", font=('TkDefaultFont', 9, 'bold')).grid(
+            row=0, column=0, sticky=tk.W, padx=5, pady=5
+        )
+        ttk.Label(manual_frame, text="Increment:").grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.scale_increment = ttk.Entry(manual_frame, width=10)
+        self.scale_increment.insert(0, "1.0")  # Default 1%
+        self.scale_increment.grid(row=0, column=2, padx=5)
+        
+        ttk.Button(manual_frame, text="▼ Scale Down", command=self.scale_down).grid(
+            row=0, column=3, padx=5
+        )
+        ttk.Button(manual_frame, text="▲ Scale Up", command=self.scale_up).grid(
+            row=0, column=4, padx=5
+        )
+        
+        self.scale_label = ttk.Label(manual_frame, text="Current: 100.0%")
+        self.scale_label.grid(row=0, column=5, padx=10)
+        
+        # Vertical shift controls
+        ttk.Label(manual_frame, text="Shift Y (Vertical):", font=('TkDefaultFont', 9, 'bold')).grid(
+            row=1, column=0, sticky=tk.W, padx=5, pady=5
+        )
+        ttk.Label(manual_frame, text="Increment:").grid(row=1, column=1, sticky=tk.W, padx=5)
+        self.y_shift_increment = ttk.Entry(manual_frame, width=10)
+        self.y_shift_increment.insert(0, "1.0")  # Default 1.0 units
+        self.y_shift_increment.grid(row=1, column=2, padx=5)
+        
+        ttk.Button(manual_frame, text="▼ Shift Down", command=self.shift_y_down).grid(
+            row=1, column=3, padx=5
+        )
+        ttk.Button(manual_frame, text="▲ Shift Up", command=self.shift_y_up).grid(
+            row=1, column=4, padx=5
+        )
+        
+        self.y_shift_label = ttk.Label(manual_frame, text="Current: 0.0")
+        self.y_shift_label.grid(row=1, column=5, padx=10)
+        
+        # Horizontal shift controls
+        ttk.Label(manual_frame, text="Shift X (Horizontal):", font=('TkDefaultFont', 9, 'bold')).grid(
+            row=2, column=0, sticky=tk.W, padx=5, pady=5
+        )
+        ttk.Label(manual_frame, text="Increment:").grid(row=2, column=1, sticky=tk.W, padx=5)
+        self.x_shift_increment = ttk.Entry(manual_frame, width=10)
+        self.x_shift_increment.insert(0, "1.0")  # Default 1.0 units
+        self.x_shift_increment.grid(row=2, column=2, padx=5)
+        
+        ttk.Button(manual_frame, text="◄ Shift Left", command=self.shift_x_left).grid(
+            row=2, column=3, padx=5
+        )
+        ttk.Button(manual_frame, text="► Shift Right", command=self.shift_x_right).grid(
+            row=2, column=4, padx=5
+        )
+        
+        self.x_shift_label = ttk.Label(manual_frame, text="Current: 0.0")
+        self.x_shift_label.grid(row=2, column=5, padx=10)
+        
+        # Reset button
+        ttk.Button(manual_frame, text="Reset All Manual Adjustments", command=self.reset_manual_adjustments).grid(
+            row=3, column=0, columnspan=6, pady=10
         )
         
         # ===== Results Section =====
         results_frame = ttk.LabelFrame(main_frame, text="Curve Equations", padding="10")
-        results_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        results_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(results_frame, text="Original Best Fit:").grid(row=0, column=0, sticky=tk.W)
         self.original_eq_text = scrolledtext.ScrolledText(results_frame, width=50, height=3)
@@ -131,14 +208,14 @@ class CurveAdjusterApp:
         
         # ===== Statistics Section =====
         stats_frame = ttk.LabelFrame(main_frame, text="Statistics", padding="10")
-        stats_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        stats_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         
         self.stats_text = scrolledtext.ScrolledText(stats_frame, width=100, height=4)
         self.stats_text.grid(row=0, column=0, sticky=(tk.W, tk.E))
         
         # ===== Plot Section =====
         plot_frame = ttk.LabelFrame(main_frame, text="Visualization", padding="10")
-        plot_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        plot_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
         self.figure = Figure(figsize=(10, 5), dpi=100)
         self.canvas = FigureCanvasTkAgg(self.figure, master=plot_frame)
@@ -300,12 +377,40 @@ class CurveAdjusterApp:
     
     def apply_adjustments_iterative(self, desired_y_min, desired_y_max):
         """Iteratively adjust to achieve exact desired min/max when evaluated at original X"""
-        max_iterations = 20
+        # Get max deviation percentage
+        try:
+            max_deviation_pct = float(self.max_deviation_entry.get().strip())
+            if max_deviation_pct <= 0:
+                messagebox.showerror("Error", "Max deviation percentage must be positive")
+                return
+        except:
+            messagebox.showerror("Error", "Invalid max deviation percentage")
+            return
+        
+        # Check if requested adjustment exceeds max deviation
+        original_y_range = self.y_original.max() - self.y_original.min()
+        desired_range = desired_y_max - desired_y_min
+        change_pct = abs(desired_range - original_y_range) / original_y_range * 100
+        
+        if change_pct > max_deviation_pct:
+            response = messagebox.askyesno("Warning", 
+                f"Requested adjustment ({change_pct:.1f}% change) exceeds\n"
+                f"maximum allowed deviation ({max_deviation_pct:.1f}%).\n\n"
+                f"Original Y range: {original_y_range:.4f}\n"
+                f"Desired Y range: {desired_range:.4f}\n\n"
+                f"Continue anyway?")
+            if not response:
+                return
+        
+        max_iterations = 50  # Increased iterations for better convergence
         tolerance = 0.001  # 0.1% tolerance
         
         # Start with the user's desired values
         target_y_min = desired_y_min
         target_y_max = desired_y_max
+        
+        # Adaptive correction factor
+        correction_factor = 0.8
         
         for iteration in range(max_iterations):
             # Apply adjustments with current target
@@ -329,13 +434,25 @@ class CurveAdjusterApp:
                 self.display_adjustment_results(iteration + 1, actual_min, actual_max, desired_y_min, desired_y_max)
                 return
             
+            # Adaptive correction based on error magnitude
+            # If errors are large, use smaller corrections to avoid oscillation
+            avg_error = (min_error + max_error) / 2
+            if avg_error > 10:
+                correction_factor = 0.5
+            elif avg_error > 5:
+                correction_factor = 0.6
+            elif avg_error > 1:
+                correction_factor = 0.7
+            else:
+                correction_factor = 0.85
+            
             # Adjust targets for next iteration
             # If actual is too low, increase target; if too high, decrease target
             min_adjustment = desired_y_min - actual_min
             max_adjustment = desired_y_max - actual_max
             
-            target_y_min += min_adjustment * 0.8  # Use 80% correction to avoid overshooting
-            target_y_max += max_adjustment * 0.8
+            target_y_min += min_adjustment * correction_factor
+            target_y_max += max_adjustment * correction_factor
         
         # Max iterations reached
         messagebox.showwarning("Warning", 
@@ -525,14 +642,42 @@ class CurveAdjusterApp:
         # Plot adjusted data if available
         # Plot against ORIGINAL X values, not shifted X values
         if self.adjusted_poly_coeffs is not None:
-            # Evaluate adjusted polynomial at original X values
-            y_adjusted_at_original_x = np.polyval(self.adjusted_poly_coeffs, self.x_original)
-            ax.scatter(self.x_original, y_adjusted_at_original_x, color='red', label='Adjusted Data', alpha=0.6, s=50, marker='s')
+            # Check if manual adjustments are active
+            has_manual_adjustments = (abs(self.manual_scale - 1.0) > 1e-6 or 
+                                     abs(self.manual_y_shift) > 1e-6 or 
+                                     abs(self.manual_x_shift) > 1e-6)
             
-            # Plot adjusted fit curve over original X range
-            x_smooth = np.linspace(self.x_original.min(), self.x_original.max(), 200)
-            y_fit = np.polyval(self.adjusted_poly_coeffs, x_smooth)
-            ax.plot(x_smooth, y_fit, 'r-', label=f'Adjusted Fit (Order {self.adjusted_order})', linewidth=2)
+            if has_manual_adjustments:
+                # Show both automatic and manual adjusted curves
+                # Automatic adjustment (without manual)
+                y_auto = np.polyval(self.adjusted_poly_coeffs, self.x_original)
+                ax.scatter(self.x_original, y_auto, color='orange', label='Auto Adjusted', 
+                          alpha=0.4, s=40, marker='s')
+                
+                x_smooth = np.linspace(self.x_original.min(), self.x_original.max(), 200)
+                y_auto_smooth = np.polyval(self.adjusted_poly_coeffs, x_smooth)
+                ax.plot(x_smooth, y_auto_smooth, color='orange', linestyle='--', 
+                       alpha=0.4, linewidth=1.5)
+                
+                # Manual adjusted data
+                y_manual = self.get_manually_adjusted_y_values(self.x_original)
+                ax.scatter(self.x_original, y_manual, color='red', 
+                          label='Manual Adjusted', alpha=0.8, s=50, marker='s')
+                
+                y_manual_smooth = self.get_manually_adjusted_y_values(x_smooth)
+                ax.plot(x_smooth, y_manual_smooth, 'r-', 
+                       label=f'Manual Fit (Order {self.adjusted_order})', linewidth=2.5)
+            else:
+                # Only automatic adjustment
+                y_adjusted_at_original_x = np.polyval(self.adjusted_poly_coeffs, self.x_original)
+                ax.scatter(self.x_original, y_adjusted_at_original_x, color='red', 
+                          label='Adjusted Data', alpha=0.6, s=50, marker='s')
+                
+                # Plot adjusted fit curve over original X range
+                x_smooth = np.linspace(self.x_original.min(), self.x_original.max(), 200)
+                y_fit = np.polyval(self.adjusted_poly_coeffs, x_smooth)
+                ax.plot(x_smooth, y_fit, 'r-', 
+                       label=f'Adjusted Fit (Order {self.adjusted_order})', linewidth=2)
         
         # Add origin marker
         ax.axhline(y=0, color='k', linestyle=':', alpha=0.3)
@@ -911,10 +1056,19 @@ class CurveAdjusterApp:
             messagebox.showwarning("Warning", "No adjusted equation available. Please load and adjust data first.")
             return
         
-        # Evaluate the final polynomial (exactly as shown in GUI) at ORIGINAL X values
-        # NO x-offset applied here - the polynomial coefficients are in the shifted coordinate system
-        # but we evaluate at the original X values directly
-        new_y_values = np.polyval(self.adjusted_poly_coeffs, self.x_original)
+        # Check if manual adjustments are active
+        has_manual_adjustments = (abs(self.manual_scale - 1.0) > 1e-6 or 
+                                 abs(self.manual_y_shift) > 1e-6 or 
+                                 abs(self.manual_x_shift) > 1e-6)
+        
+        if has_manual_adjustments:
+            # Use manually adjusted values
+            new_y_values = self.get_manually_adjusted_y_values(self.x_original)
+            adjustment_type = "with manual adjustments"
+        else:
+            # Evaluate the final polynomial at ORIGINAL X values
+            new_y_values = np.polyval(self.adjusted_poly_coeffs, self.x_original)
+            adjustment_type = "from adjusted fit"
         
         # Format as column (one value per line)
         y_column = '\n'.join([f"{y:.10f}" for y in new_y_values])
@@ -923,10 +1077,10 @@ class CurveAdjusterApp:
         
         messagebox.showinfo("Success", 
             f"New Y values copied to clipboard!\n\n"
+            f"Type: {adjustment_type}\n"
             f"Format: One value per line\n"
             f"Count: {len(new_y_values)} values\n"
             f"Range: [{new_y_values.min():.6f}, {new_y_values.max():.6f}]\n\n"
-            f"Evaluated using the equation shown in 'Adjusted Best Fit'\n"
             f"Ready to paste into Excel/spreadsheet!")
     
     def clear_all(self):
@@ -946,8 +1100,163 @@ class CurveAdjusterApp:
         self.original_poly_coeffs = None
         self.adjusted_poly_coeffs = None
         
+        # Reset manual adjustments
+        self.manual_scale = 1.0
+        self.manual_y_shift = 0.0
+        self.manual_x_shift = 0.0
+        self.update_manual_labels()
+        
         self.figure.clear()
         self.canvas.draw()
+    
+    def scale_up(self):
+        """Scale curve up by the specified percentage increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.scale_increment.get()) / 100.0
+            self.manual_scale *= (1 + increment)
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid scale increment")
+    
+    def scale_down(self):
+        """Scale curve down by the specified percentage increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.scale_increment.get()) / 100.0
+            self.manual_scale *= (1 - increment)
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid scale increment")
+    
+    def shift_y_up(self):
+        """Shift curve up by the specified increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.y_shift_increment.get())
+            self.manual_y_shift += increment
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid Y shift increment")
+    
+    def shift_y_down(self):
+        """Shift curve down by the specified increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.y_shift_increment.get())
+            self.manual_y_shift -= increment
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid Y shift increment")
+    
+    def shift_x_right(self):
+        """Shift curve right by the specified increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.x_shift_increment.get())
+            self.manual_x_shift += increment
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid X shift increment")
+    
+    def shift_x_left(self):
+        """Shift curve left by the specified increment"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "Please apply adjustments first")
+            return
+        
+        try:
+            increment = float(self.x_shift_increment.get())
+            self.manual_x_shift -= increment
+            self.apply_manual_adjustments()
+        except:
+            messagebox.showerror("Error", "Invalid X shift increment")
+    
+    def apply_manual_adjustments(self):
+        """Apply all manual adjustments to the curve"""
+        # Update labels
+        self.update_manual_labels()
+        
+        # Replot with manual adjustments
+        self.plot_data()
+        
+        # Update stats to show current Y range with manual adjustments
+        final_y_values = self.get_manually_adjusted_y_values(self.x_original)
+        actual_min = final_y_values.min()
+        actual_max = final_y_values.max()
+        
+        current_stats = self.stats_text.get("1.0", tk.END)
+        manual_stats = f"\n\nManual Adjustments Applied:\n"
+        manual_stats += f"  Scale: {self.manual_scale*100:.2f}%\n"
+        manual_stats += f"  Y Shift: {self.manual_y_shift:+.4f}\n"
+        manual_stats += f"  X Shift: {self.manual_x_shift:+.4f}\n"
+        manual_stats += f"  Current Y range: [{actual_min:.4f}, {actual_max:.4f}]"
+        
+        # Check if manual stats already exist and update them
+        if "Manual Adjustments Applied:" in current_stats:
+            # Remove old manual stats and append new ones
+            stats_parts = current_stats.split("Manual Adjustments Applied:")
+            self.stats_text.delete("1.0", tk.END)
+            self.stats_text.insert("1.0", stats_parts[0].rstrip() + manual_stats)
+        else:
+            # Append manual stats
+            self.stats_text.insert(tk.END, manual_stats)
+    
+    def get_manually_adjusted_y_values(self, x_values):
+        """Get Y values with all manual adjustments applied"""
+        # Evaluate polynomial at shifted X values
+        x_shifted = x_values - self.manual_x_shift
+        y_base = np.polyval(self.adjusted_poly_coeffs, x_shifted)
+        
+        # Apply scale and Y shift
+        y_adjusted = y_base * self.manual_scale + self.manual_y_shift
+        
+        return y_adjusted
+    
+    def update_manual_labels(self):
+        """Update the labels showing current manual adjustment values"""
+        # Safety check in case this is called before UI is created
+        if hasattr(self, 'scale_label'):
+            self.scale_label.config(text=f"Current: {self.manual_scale*100:.2f}%")
+            self.y_shift_label.config(text=f"Current: {self.manual_y_shift:+.4f}")
+            self.x_shift_label.config(text=f"Current: {self.manual_x_shift:+.4f}")
+    
+    def reset_manual_adjustments(self):
+        """Reset all manual adjustments to default values"""
+        if self.adjusted_poly_coeffs is None:
+            messagebox.showwarning("Warning", "No adjustments to reset")
+            return
+        
+        self.manual_scale = 1.0
+        self.manual_y_shift = 0.0
+        self.manual_x_shift = 0.0
+        
+        self.update_manual_labels()
+        self.plot_data()
+        
+        # Remove manual adjustment stats if present
+        current_stats = self.stats_text.get("1.0", tk.END)
+        if "Manual Adjustments Applied:" in current_stats:
+            stats_parts = current_stats.split("Manual Adjustments Applied:")
+            self.stats_text.delete("1.0", tk.END)
+            self.stats_text.insert("1.0", stats_parts[0].rstrip())
+        
+        messagebox.showinfo("Success", "Manual adjustments reset")
 
 
 def main():
